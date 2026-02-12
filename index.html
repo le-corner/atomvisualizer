@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Atom Visualizer</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+<style>
+:root{
+  --bg:#f8fafc; --panel:#ffffff; --border:#cbd5e1; --accent:#2563eb; --text:#0f172a;
+}
+body{
+  margin:0; font-family:system-ui; background:var(--bg); color:var(--text);
+  display:flex; flex-direction:column; align-items:center;
+}
+h1{ margin:15px; text-align:center; }
+.wrapper{
+  display:flex; flex-wrap:wrap; justify-content:center; gap:20px;
+  width:100%; max-width:1400px; padding:10px;
+}
+.controls{
+  background:var(--panel); border:1px solid var(--border); border-radius:12px;
+  padding:15px; flex:1 1 300px; min-width:260px;
+}
+canvas{
+  background:white; border:1px solid var(--border); border-radius:12px;
+  flex:1 1 800px; max-width:900px; width:95%; height:800px;
+  cursor:grab;
+}
+button, select, input[type=number]{
+  margin:5px; padding:6px 10px; border-radius:6px; border:1px solid var(--border);
+  background:white; cursor:pointer; width:90px;
+}
+button:hover{background:#e2e8f0;}
+#infoPanel{
+  background:var(--panel); border:1px solid var(--border); border-radius:12px;
+  padding:15px; margin-top:15px; max-width:900px; display:none;
+}
+.closeBtn{ float:right; cursor:pointer; color:#dc2626; }
+.zoomControls{ margin-top:10px; display:flex; flex-wrap:wrap; gap:5px; }
+label.greek{ font-weight:bold; display:flex; align-items:center; gap:5px; }
+.instructionText{
+  position:absolute; top:10px; left:50%; transform:translateX(-50%);
+  font-size:14px; color:rgba(0,0,0,0.4); pointer-events:none;
+  transition: opacity 0.3s;
+}
+.instructionText.hidden{ opacity:0; }
+@media (max-width:800px){ canvas{height:600px;} }
+</style>
+</head>
+<body>
+
+<h1><i class="fa-solid fa-atom"></i> Atom Visualizer</h1>
+
+<div class="wrapper">
+
+<div class="controls">
+  <div><label class="greek"><i class="fa-solid fa-circle-plus"></i> Proton (π⁺)</label><br>
+    <input type="number" id="pInput" min="0" max="118" value="1">
+  </div>
+
+  <div><label class="greek"><i class="fa-solid fa-circle"></i> Neutron (ν⁰)</label><br>
+    <input type="number" id="nInput" min="0" max="200" value="0">
+  </div>
+
+  <div><label class="greek"><i class="fa-solid fa-bolt"></i> Electron (e⁻)</label><br>
+    <input type="number" id="eInput" min="0" max="200" value="1">
+  </div>
+
+  <div><label class="greek"><i class="fa-solid fa-table"></i> Templates</label><br>
+    <select id="templateSelect"></select>
+  </div>
+
+  <div class="zoomControls">
+    <button onclick="zoomIn()">Zoom In <i class="fa-solid fa-magnifying-glass-plus"></i></button>
+    <button onclick="zoomOut()">Zoom Out <i class="fa-solid fa-magnifying-glass-minus"></i></button>
+  </div>
+
+  <div style="margin-top:10px"><b>Estimated Half-Life:</b>
+    <div id="halfLife"></div>
+  </div>
+</div>
+
+<div style="position:relative;">
+  <canvas id="canvas"></canvas>
+  <div class="instructionText" id="instructionText">Tap the part of the atom to see description.</div>
+</div>
+
+<div id="infoPanel">
+  <span class="closeBtn" onclick="closeInfo()"><i class="fa-solid fa-xmark"></i></span>
+  <div id="infoContent"></div>
+</div>
+
+<script>
+// Simple Periodic Table (first 20 elements)
+const periodicTable=[
+  { z:1,symbol:"H",name:"Hydrogen",neutrons:0 },
+  { z:2,symbol:"He",name:"Helium",neutrons:2 },
+  { z:3,symbol:"Li",name:"Lithium",neutrons:4 },
+  { z:4,symbol:"Be",name:"Beryllium",neutrons:5 },
+  { z:5,symbol:"B",name:"Boron",neutrons:6 },
+  { z:6,symbol:"C",name:"Carbon",neutrons:6 },
+  { z:7,symbol:"N",name:"Nitrogen",neutrons:7 },
+  { z:8,symbol:"O",name:"Oxygen",neutrons:8 },
+  { z:9,symbol:"F",name:"Fluorine",neutrons:10 },
+  { z:10,symbol:"Ne",name:"Neon",neutrons:10 },
+  { z:11,symbol:"Na",name:"Sodium",neutrons:12 },
+  { z:12,symbol:"Mg",name:"Magnesium",neutrons:12 },
+  { z:13,symbol:"Al",name:"Aluminium",neutrons:14 },
+  { z:14,symbol:"Si",name:"Silicon",neutrons:14 },
+  { z:15,symbol:"P",name:"Phosphorus",neutrons:16 },
+  { z:16,symbol:"S",name:"Sulfur",neutrons:16 },
+  { z:17,symbol:"Cl",name:"Chlorine",neutrons:18 },
+  { z:18,symbol:"Ar",name:"Argon",neutrons:22 },
+  { z:19,symbol:"K",name:"Potassium",neutrons:20 },
+  { z:20,symbol:"Ca",name:"Calcium",neutrons:20 },
+];
+
+const templateSelect=document.getElementById("templateSelect");
+templateSelect.innerHTML="<option value=''>Custom</option>";
+periodicTable.forEach(e=>{
+  const opt=document.createElement("option");
+  opt.value=e.z;
+  opt.textContent=`${e.symbol} (${e.name})`;
+  templateSelect.appendChild(opt);
+});
+
+let canvas=document.getElementById("canvas"), ctx=canvas.getContext("2d");
+let scale=1, protons=1, neutrons=0, electrons=1, angle=0, clickable=[], selected=null;
+let cameraX=0, cameraY=0, isDragging=false, dragStartX=0, dragStartY=0;
+const instructionText=document.getElementById("instructionText");
+
+function resizeCanvas(){ canvas.width=canvas.clientWidth; canvas.height=canvas.clientHeight; }
+window.addEventListener("resize",resizeCanvas); resizeCanvas();
+
+// Inputs
+const pInput=document.getElementById("pInput"), nInput=document.getElementById("nInput"), eInput=document.getElementById("eInput");
+function updateValues(){
+  let p=parseInt(pInput.value), n=parseInt(nInput.value), e=parseInt(eInput.value);
+  if(isNaN(p)||p<0||p>118)p=protons;
+  if(isNaN(n)||n<0||n>200)n=neutrons;
+  if(isNaN(e)||e<0||e>200)e=electrons;
+  protons=p; neutrons=n; electrons=e;
+  pInput.value=protons; nInput.value=neutrons; eInput.value=electrons;
+}
+[pInput,nInput,eInput].forEach(i=>i.addEventListener("change",updateValues));
+
+templateSelect.addEventListener("change",()=>{
+  const z=parseInt(templateSelect.value);
+  if(!z) return;
+  const atom=periodicTable.find(e=>e.z===z);
+  protons=atom.z; neutrons=atom.neutrons; electrons=atom.z;
+  pInput.value=protons; nInput.value=neutrons; eInput.value=electrons;
+});
+
+// Half-life estimate
+function estimateHalfLife(p,n){
+  if(p===0)return"N/A";
+  let diff=Math.abs(n/p-1);
+  if(diff<0.1)return"Stable (billions of years)";
+  if(diff<0.3)return"Moderately stable (millions of years)";
+  if(diff<0.5)return"Unstable (years to days)";
+  if(diff<0.7)return"Very unstable (hours to seconds)";
+  return"Extremely unstable (milliseconds)";
+}
+function updateUI(){ document.getElementById("halfLife").textContent=estimateHalfLife(protons,neutrons); }
+
+// Zoom
+function zoomIn(){ scale*=1.2; }
+function zoomOut(){ scale/=1.2; }
+
+// Camera panning
+canvas.addEventListener("mousedown", e => { isDragging=true; dragStartX=e.clientX-cameraX; dragStartY=e.clientY-cameraY; canvas.style.cursor="grabbing"; });
+canvas.addEventListener("mousemove", e => { if(isDragging){ cameraX=e.clientX-dragStartX; cameraY=e.clientY-dragStartY; } });
+canvas.addEventListener("mouseup", e => { isDragging=false; canvas.style.cursor="grab"; });
+canvas.addEventListener("mouseleave", e => { isDragging=false; canvas.style.cursor="grab"; });
+
+// Draw
+function drawParticle(x,y,color,type,wiki){
+  ctx.beginPath(); ctx.arc(x+cameraX,y+cameraY,8*scale,0,Math.PI*2); ctx.fillStyle=color; ctx.fill();
+  ctx.strokeStyle="#334155"; ctx.stroke();
+  clickable.push({x:x+cameraX,y:y+cameraY,r:8*scale,type,wiki});
+  if(selected && selected.x===x+cameraX && selected.y===y+cameraY){
+    ctx.beginPath(); ctx.arc(x+cameraX,y+cameraY,12*scale,0,Math.PI*2); ctx.strokeStyle="#f59e0b"; ctx.lineWidth=2; ctx.stroke(); ctx.lineWidth=1;
+  }
+}
+
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  clickable=[];
+  let cx=canvas.width/2;
+  let cy=canvas.height/2;
+  let nucleusR=30*scale+(protons+neutrons)*1.2*scale;
+
+  ctx.beginPath(); ctx.arc(cx,cy,nucleusR,0,Math.PI*2); ctx.fillStyle="#f87171"; ctx.fill();
+  ctx.strokeStyle="#334155"; ctx.stroke(); clickable.push({type:"Nucleus",x:cx,y:cy,r:nucleusR,wiki:"Atomic nucleus"});
+
+  for(let i=0;i<protons;i++){ let x=cx+(Math.random()-0.5)*nucleusR*0.7; let y=cy+(Math.random()-0.5)*nucleusR*0.7; drawParticle(x,y,"#ef4444","Proton","Proton"); }
+  for(let i=0;i<neutrons;i++){ let x=cx+(Math.random()-0.5)*nucleusR*0.7; let y=cy+(Math.random()-0.5)*nucleusR*0.7; drawParticle(x,y,"#94a3b8","Neutron","Neutron"); }
+
+  let baseRadius=nucleusR+40*scale; let shells=Math.ceil(electrons/8);
+  for(let s=0;s<shells;s++){ ctx.beginPath(); ctx.arc(cx,cy,baseRadius+70*scale*s,0,Math.PI*2); ctx.strokeStyle="#cbd5e1"; ctx.stroke(); }
+
+  for(let i=0;i<electrons;i++){
+    let shell=Math.floor(i/8); let radius=baseRadius+70*scale*shell; let count=Math.min(8,electrons-shell*8);
+    let a=(i%8)*(Math.PI*2/count)+angle*(1/(shell+1)); let x=cx+radius*Math.cos(a); let y=cy+radius*Math.sin(a);
+    drawParticle(x,y,"#3b82f6","Electron","Electron");
+  }
+
+  angle+=0.01; updateUI(); requestAnimationFrame(draw);
+}
+
+// Click to select particle
+canvas.addEventListener("click", async e => {
+  let rect=canvas.getBoundingClientRect();
+  let mx=e.clientX-rect.left, my=e.clientY-rect.top;
+  for(let part of clickable){
+    if(Math.hypot(mx-part.x,my-part.y)<=part.r){
+      selected=part; instructionText.classList.add("hidden"); showInfo(part); return;
+    }
+  }
+});
+
+// Wikipedia description
+async function showInfo(part){
+  document.getElementById("infoPanel").style.display="block";
+  document.getElementById("infoContent").innerHTML="<b>"+part.type+"</b><br>Loading...";
+  try{
+    let res=await fetch("https://en.wikipedia.org/api/rest_v1/page/summary/"+encodeURIComponent(part.wiki));
+    let data=await res.json();
+    document.getElementById("infoContent").innerHTML="<h3>"+data.title+"</h3><p>"+data.extract+"</p>";
+  }catch{ document.getElementById("infoContent").innerHTML="Failed to load Wikipedia."; }
+}
+function closeInfo(){ selected=null; document.getElementById("infoPanel").style.display="none"; instructionText.classList.remove("hidden"); }
+
+draw();
+</script>
+</body>
+</html>
